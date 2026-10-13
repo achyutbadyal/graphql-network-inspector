@@ -115,6 +115,38 @@ To produce a distributable zip (e.g. for AMO submission) run
 `yarn bundle:firefox`, which writes `build-firefox.zip`. Running the full
 `yarn bundle` produces both `build-chrome.zip` and `build-firefox.zip`.
 
+### Signing for a permanent install
+
+Firefox only persists _signed_ add-ons, so the temporary add-on above is
+discarded every time the browser closes. Setting
+`xpinstall.signatures.required = false` is not a workaround — modern release
+builds ignore it. An AMO signature on the **unlisted** channel is free, fully
+automated, and never publicly listed.
+
+```bash
+export WEB_EXT_API_KEY=... WEB_EXT_API_SECRET=...
+yarn sign:firefox:open
+```
+
+That runs `build:firefox`, verifies the built manifest is Firefox-ready, submits
+it to AMO, and writes the signed `.xpi` to `dist/`. The `:open` variant hands it
+to your browser for the install prompt.
+
+| Command                                     | Does                                           |
+| ------------------------------------------- | ---------------------------------------------- |
+| `yarn sign:firefox`                         | build + sign, write `dist/*.xpi`               |
+| `yarn sign:firefox:open`                    | ...and open it for the install prompt          |
+| `yarn lint:firefox`                         | build, then `web-ext lint` against AMO's rules |
+| `bash scripts/sign-firefox.sh --build-only` | build without signing                          |
+
+API keys are free and one-time:
+https://addons.mozilla.org/developers/addon/api/key/
+
+`scripts/set-firefox-settings.js` declares
+`data_collection_permissions.required = ["none"]`, which is a mandatory AMO
+disclosure. Keep it accurate — if the extension ever transmits captured network
+data off-device, that value has to change.
+
 ## Architecture Overview
 
 The extension is built with React and follows a hooks-based architecture:
