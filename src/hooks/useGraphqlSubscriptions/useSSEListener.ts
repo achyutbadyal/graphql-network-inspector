@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import * as safeJson from '@/helpers/safeJson'
 import { chromeProvider } from '@/services/chromeProvider'
+import { hasDebuggerSupport } from '@/services/browserSupport'
 import { ITrackedConnection, ISubscriptionMessage, MessageData } from './types'
 import { isGraphQLPayload, formatMessageData, headersToArray } from './utils'
 
@@ -57,7 +58,8 @@ export const useSSEListener = ({
   const chrome = chromeProvider()
 
   useEffect(() => {
-    if (!isEnabled) return
+    // The debugger API (Chrome DevTools Protocol) is not available in Firefox.
+    if (!isEnabled || !hasDebuggerSupport()) return
 
     const addMessage = (requestId: string, rawData: string) => {
       const conn = connections.get(requestId)

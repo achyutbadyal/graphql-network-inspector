@@ -85,6 +85,33 @@ npm run dev
 
 The mock server includes a transport toggle button allowing you to test both WebSocket and SSE subscriptions.
 
+## Building & Loading in Firefox
+
+The extension targets Manifest V3 and runs in both Chrome and Firefox. Firefox
+does not support MV3 background service workers or the Chrome `debugger` API,
+so the Firefox build swaps the service worker for a background script (event
+page) and removes the Chrome-only permission. Because subscription
+(WebSocket/SSE) monitoring depends on the Chrome DevTools Protocol `debugger`
+API, it is unavailable in Firefox and the toolbar shows a notice instead. All
+other functionality, including GraphQL request inspection, works normally.
+
+Build an unpacked Firefox extension:
+
+```bash
+yarn build:firefox
+```
+
+Then load it in Firefox:
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on…**.
+3. Select `build/manifest.json` from this repository.
+4. Open devtools on any page and select the **GraphQL Network** tab.
+
+To produce a distributable zip (e.g. for AMO submission) run
+`yarn bundle:firefox`, which writes `build-firefox.zip`. Running the full
+`yarn bundle` produces both `build-chrome.zip` and `build-firefox.zip`.
+
 ## Architecture Overview
 
 The extension is built with React and follows a hooks-based architecture:

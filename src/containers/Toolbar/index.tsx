@@ -8,6 +8,7 @@ import { OverflowPopover } from '../../components/OverflowPopover'
 import { Bar } from '../../components/Bar'
 import { DocsIcon } from '../../components/Icons/DocsIcon'
 import { useOperationFilters } from '@/hooks/useOperationFilters'
+import { hasDebuggerSupport } from '@/services/browserSupport'
 import { LearnIcon } from '../../components/Icons/LearnIcon'
 
 interface IToolbarProps {
@@ -48,6 +49,9 @@ export const Toolbar = (props: IToolbarProps) => {
   } = props
   const { setIsSearchOpen } = useSearch()
   const { operationFilters } = useOperationFilters()
+  // Subscription monitoring relies on the Chrome debugger API which Firefox
+  // does not implement. Let the user know instead of silently showing nothing.
+  const isSubscriptionMonitoringSupported = hasDebuggerSupport()
 
   return (
     <div>
@@ -131,29 +135,40 @@ export const Toolbar = (props: IToolbarProps) => {
       {operationFilters.subscription && (
         <Bar testId="toolbar-websocket" className="border-b">
           <span className="pl-3 font-bold">Websocket</span>
-          <Textfield
-            className="w-40"
-            value={websocketUrlFilter}
-            onChange={(event) =>
-              onWebsocketUrlFilterChange(event.currentTarget.value)
-            }
-            placeholder={'URL Filter'}
-            testId="websocket-url-filter-input"
-          />
-          <Checkbox
-            id="showFullWebsocketMessage"
-            label="Show Full Message"
-            checked={showFullWebsocketMessage}
-            onChange={onShowFullWebsocketMessageChange}
-            testId="show-full-websocket-message-checkbox"
-          />
-          <Checkbox
-            id="newestFirst"
-            label="Newest First"
-            checked={newestFirst}
-            onChange={onNewestFirstChange}
-            testId="newest-first-checkbox"
-          />
+          {isSubscriptionMonitoringSupported ? (
+            <>
+              <Textfield
+                className="w-40"
+                value={websocketUrlFilter}
+                onChange={(event) =>
+                  onWebsocketUrlFilterChange(event.currentTarget.value)
+                }
+                placeholder={'URL Filter'}
+                testId="websocket-url-filter-input"
+              />
+              <Checkbox
+                id="showFullWebsocketMessage"
+                label="Show Full Message"
+                checked={showFullWebsocketMessage}
+                onChange={onShowFullWebsocketMessageChange}
+                testId="show-full-websocket-message-checkbox"
+              />
+              <Checkbox
+                id="newestFirst"
+                label="Newest First"
+                checked={newestFirst}
+                onChange={onNewestFirstChange}
+                testId="newest-first-checkbox"
+              />
+            </>
+          ) : (
+            <span
+              className="text-sm text-gray-500 dark:text-gray-400"
+              data-testid="subscriptions-unsupported"
+            >
+              Subscription monitoring is not supported in this browser
+            </span>
+          )}
         </Bar>
       )}
     </div>

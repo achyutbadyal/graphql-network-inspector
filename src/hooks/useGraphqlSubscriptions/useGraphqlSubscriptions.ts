@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { chromeProvider } from '@/services/chromeProvider'
+import { hasDebuggerSupport } from '@/services/browserSupport'
 import { useSSEListener } from './useSSEListener'
 import { useWebSocketListener } from './useWebSocketListener'
 import { ITrackedConnection, ISubscriptionRequest } from './types'
@@ -19,6 +20,10 @@ interface UseGraphqlSubscriptionsOptions {
  * Monitors GraphQL subscription connections (WebSocket and SSE) using the
  * Chrome DevTools Protocol debugger API.
  *
+ * The debugger API is Chrome only (Firefox does not implement it), so the
+ * monitoring is feature detected. When it is unavailable the hook becomes a
+ * no-op and simply returns an empty list rather than throwing.
+ *
  * Returns an array of subscription requests with their messages, and a
  * function to clear all tracked requests.
  *
@@ -36,6 +41,7 @@ export const useGraphqlSubscriptions = (
   const [requests, setRequests] = useState<ISubscriptionRequest[]>([])
   const connectionsRef = useRef(new Map<string, ITrackedConnection>())
   const chrome = chromeProvider()
+  const canMonitorSubscriptions = hasDebuggerSupport()
 
   const syncRequestsState = useCallback(() => {
     const filtered = Array.from(connectionsRef.current.values())
@@ -52,7 +58,7 @@ export const useGraphqlSubscriptions = (
 
   // Attach Chrome debugger to enable network monitoring
   useEffect(() => {
-    if (!options.isEnabled) return
+    if (!options.isEnabled || !canMonitorSubscriptions) return
 
     const tabId = chrome.devtools.inspectedWindow.tabId
     let isDetached = false
@@ -87,16 +93,16 @@ export const useGraphqlSubscriptions = (
         })
       }
     }
-  }, [chrome, options.isEnabled])
+  }, [chrome, options.isEnabled, canMonitorSubscriptions])
 
   useWebSocketListener({
-    isEnabled: options.isEnabled,
+    isEnabled: options.isEnabled && canMonitorSubscriptions,
     connections: connectionsRef.current,
     onUpdate: syncRequestsState,
   })
 
   useSSEListener({
-    isEnabled: options.isEnabled,
+    isEnabled: options.isEnabled && canMonitorSubscriptions,
     connections: connectionsRef.current,
     onUpdate: syncRequestsState,
   })
