@@ -41,3 +41,14 @@ export const getSupportedBrowser = (): SupportedBrowser => {
  */
 export const hasDebuggerSupport = (): boolean =>
   Boolean(chromeProvider()?.debugger?.attach)
+
+/**
+ * The `webRequest` API is not exposed to devtools panels in Firefox. (Firefox
+ * also treats Manifest V3 host permissions as optional, granting them per site
+ * rather than at install time.) When it is unavailable we fall back to the
+ * devtools network API, whose HAR entries carry the request body in
+ * `request.postData`, so GraphQL requests can still be detected and displayed.
+ */
+export const hasWebRequestSupport = (): boolean =>
+  Boolean(chromeProvider()?.webRequest?.onBeforeRequest?.addListener)
+

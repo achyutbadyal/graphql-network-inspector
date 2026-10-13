@@ -10,6 +10,7 @@ import {
   onBeforeSendHeaders,
   getHAR,
 } from '../services/networkMonitor'
+import { hasWebRequestSupport } from '../services/browserSupport'
 import {
   IIncompleteNetworkRequest,
   ICompleteNetworkRequest,
@@ -157,6 +158,100 @@ const findMatchingWebRequest = async (
   return match.filter((r) => r)[0]
 }
 
+/**
+ * Read the response body of a finished request.
+ *
+ * Chrome calls back with `(content, encoding)`, whereas Firefox resolves a
+ * promise with `{ content, encoding }` (and, through the `chrome` compatibility
+ * alias, may hand the callback that same object). Normalising here keeps the
+ * callers browser agnostic.
+ */
+const getRequestContent = (
+  details: chrome.devtools.network.Request
+): Promise<{ content: string; encoding: string }> =>
+  new Promise((resolve) => {
+    const settle = (result: unknown, encoding?: string) => {
+      if (result && typeof result === 'object') {
+        const value = result as { content?: string; encoding?: string }
+        resolve({ content: value.content ?? '', encoding: value.encoding ?? '' })
+      } else {
+        resolve({ content: (result as string) ?? '', encoding: encoding ?? '' })
+      }
+    }
+
+    try {
+      const maybePromise = (
+        details.getContent as unknown as (
+          cb: (content: unknown, encoding?: string) => void
+        ) => unknown
+      )(settle)
+
+      if (maybePromise && typeof (maybePromise as Promise<unknown>).then === 'function') {
+        const promise = maybePromise as Promise<unknown>
+        promise
+          .then(settle)
+          .catch(() => resolve({ content: '', encoding: '' }))
+      }
+    } catch (error) {
+      console.error('Error getting request content:', error)
+      resolve({ content: '', encoding: '' })
+    }
+  })
+
+/**
+ * Build a complete network request from a finished devtools network entry.
+ *
+ * The request body is read from the HAR entry itself (`request.postData`), so
+ * this does not depend on the `webRequest` API. It is used both for historic
+ * requests (from `getHAR`) and, in browsers that do not expose `webRequest` to
+ * devtools panels such as Firefox, as the primary source of live requests.
+ */
+const buildRequestFromHAREntry = async (
+  details: chrome.devtools.network.Request
+): Promise<ICompleteNetworkRequest | null> => {
+  try {
+    const { content, encoding } = await getRequestContent(details)
+    const responseBody = encoding === 'base64' ? atob(content) : content
+
+    const body = await getRequestBody(details)
+    if (!body) {
+      return null
+    }
+
+    const graphqlRequestBody = parseGraphqlBody(body)
+    if (!graphqlRequestBody) {
+      return null
+    }
+
+    const primaryOperation = getFirstGraphqlOperation(graphqlRequestBody)
+    if (!primaryOperation) {
+      return null
+    }
+
+    return {
+      id: uuid(),
+      ...processNetworkRequest(details, responseBody),
+      request: {
+        primaryOperation,
+        body: graphqlRequestBody.map((requestBody) => ({
+          ...requestBody,
+          id: uuid(),
+        })),
+        bodySize: body ? body.length : 0,
+        headers: details.request.headers,
+        headersSize: details.request.headersSize,
+      },
+      native: {
+        networkRequest: details,
+        webRequest: {} as chrome.webRequest.WebRequestBodyDetails,
+      },
+    }
+  } catch (error) {
+    console.error('Error processing HAR entry content:', error)
+    return null
+  }
+}
+
 export const useNetworkMonitor = (): [
   ICompleteNetworkRequest[],
   (opts?: IClearWebRequestsOptions) => void
@@ -164,6 +259,10 @@ export const useNetworkMonitor = (): [
   const [requests, setRequests, getLatestRequests] = useLatestState<
     IIncompleteNetworkRequest[]
   >([])
+
+  // Firefox does not expose the webRequest API to devtools panels, so the
+  // started/finished request correlation below cannot be used there.
+  const isWebRequestSupported = hasWebRequestSupport()
 
   // Track if component is mounted to prevent state updates after unmount
   const isMountedRef = useRef(true)
@@ -291,45 +390,51 @@ export const useNetworkMonitor = (): [
           return
         }
 
-        details.getContent(async (content, encoding) => {
-          try {
-            // Check if still mounted before processing
-            if (!isMountedRef.current) return
+        // Without the webRequest API we cannot correlate a started request
+        // with a finished one, so build the request straight from the finished
+        // devtools network entry instead.
+        if (!isWebRequestSupported) {
+          const completeRequest = await buildRequestFromHAREntry(details)
+          if (!isMountedRef.current || !completeRequest) return
+          setRequests((prevRequests) => prevRequests.concat(completeRequest))
+          return
+        }
 
-            const responseBody = encoding === 'base64' ? atob(content) : content
-            const requests = getLatestRequests()
-            const matchedRequest = await findMatchingWebRequest(requests, details)
+        const { content, encoding } = await getRequestContent(details)
 
-            // Check again after async operation
-            if (!isMountedRef.current || !matchedRequest) {
-              return
+        // Check if still mounted before processing
+        if (!isMountedRef.current) return
+
+        const responseBody = encoding === 'base64' ? atob(content) : content
+        const requests = getLatestRequests()
+        const matchedRequest = await findMatchingWebRequest(requests, details)
+
+        // Check again after async operation
+        if (!isMountedRef.current || !matchedRequest) {
+          return
+        }
+
+        setRequests((prevRequests) => {
+          return prevRequests.map((prevRequest) => {
+            if (prevRequest.id === matchedRequest.id) {
+              return {
+                ...prevRequest,
+                ...processNetworkRequest(details, responseBody),
+                native: {
+                  ...prevRequest.native,
+                  networkRequest: details,
+                },
+              }
+            } else {
+              return prevRequest
             }
-
-            setRequests((prevRequests) => {
-              return prevRequests.map((prevRequest) => {
-                if (prevRequest.id === matchedRequest.id) {
-                  return {
-                    ...prevRequest,
-                    ...processNetworkRequest(details, responseBody),
-                    native: {
-                      ...prevRequest.native,
-                      networkRequest: details,
-                    },
-                  }
-                } else {
-                  return prevRequest
-                }
-              })
-            })
-          } catch (error) {
-            console.error('Error processing request content:', error)
-          }
+          })
         })
       } catch (error) {
         console.error('Error handling finished request:', error)
       }
     },
-    [setRequests, getLatestRequests]
+    [setRequests, getLatestRequests, isWebRequestSupported]
   )
 
   const handleHAREntries = useCallback(
@@ -340,59 +445,7 @@ export const useNetworkMonitor = (): [
         })
 
         const entriesWithContent = await Promise.all(
-          validEntries.map((details) => {
-            return new Promise<ICompleteNetworkRequest | null>((resolve) => {
-              try {
-                details.getContent(async (responseBody) => {
-                  try {
-                    const body = await getRequestBody(details)
-                    if (!body) {
-                      resolve(null)
-                      return
-                    }
-
-                    const graphqlRequestBody = parseGraphqlBody(body)
-                    if (!graphqlRequestBody) {
-                      resolve(null)
-                      return
-                    }
-
-                    const primaryOperation =
-                      getFirstGraphqlOperation(graphqlRequestBody)
-                    if (!primaryOperation) {
-                      resolve(null)
-                      return
-                    }
-
-                    resolve({
-                      id: uuid(),
-                      ...processNetworkRequest(details, responseBody),
-                      request: {
-                        primaryOperation,
-                        body: graphqlRequestBody.map((requestBody) => ({
-                          ...requestBody,
-                          id: uuid(),
-                        })),
-                        bodySize: body ? body.length : 0,
-                        headers: details.request.headers,
-                        headersSize: details.request.headersSize,
-                      },
-                      native: {
-                        networkRequest: details,
-                        webRequest: {} as chrome.webRequest.WebRequestBodyDetails,
-                      },
-                    })
-                  } catch (error) {
-                    console.error('Error processing HAR entry content:', error)
-                    resolve(null)
-                  }
-                })
-              } catch (error) {
-                console.error('Error getting HAR entry content:', error)
-                resolve(null)
-              }
-            })
-          })
+          validEntries.map(buildRequestFromHAREntry)
         )
 
         // Filter out null entries from failed processing

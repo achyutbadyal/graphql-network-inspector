@@ -90,10 +90,13 @@ The mock server includes a transport toggle button allowing you to test both Web
 The extension targets Manifest V3 and runs in both Chrome and Firefox. Firefox
 does not support MV3 background service workers or the Chrome `debugger` API,
 so the Firefox build swaps the service worker for a background script (event
-page) and removes the Chrome-only permission. Because subscription
-(WebSocket/SSE) monitoring depends on the Chrome DevTools Protocol `debugger`
-API, it is unavailable in Firefox and the toolbar shows a notice instead. All
-other functionality, including GraphQL request inspection, works normally.
+page) and removes the Chrome-only permission. Firefox also does not expose the
+`webRequest` API to devtools panels, so request monitoring falls back to the
+devtools network API, reading request bodies from the HAR `postData` field
+instead. Because subscription (WebSocket/SSE) monitoring depends on the Chrome
+DevTools Protocol `debugger` API, it is unavailable in Firefox and the toolbar
+shows a notice instead. All other functionality, including GraphQL request
+inspection, works normally.
 
 Build an unpacked Firefox extension:
 
